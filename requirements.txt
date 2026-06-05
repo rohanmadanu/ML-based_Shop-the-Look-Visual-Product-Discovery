@@ -1,8 +1,9 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
 torch
 torchvision
 transformers
 ultralytics
-gradio
+streamlit
 Pillow
 pandas
 requests
