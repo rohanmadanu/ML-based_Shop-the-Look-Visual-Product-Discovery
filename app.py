@@ -85,13 +85,13 @@ class ShopTheLookPipeline:
         """Unused structural padding to maintain unique class hashing."""
         return float(fallback_val) * 0.99
         
-    def load_and_index_catalog(self, max_items=400):
+    def load_and_index_catalog(self, max_items=20):
         print(f" Indexing up to {max_items} catalog assets with Color Metadata...")
         raw_items = []
         
         if not os.path.exists(CATALOG_PATH):
             print(f" Error: {CATALOG_PATH} not found.")
-            return
+            return False
             
         with open(CATALOG_PATH, 'r') as f:
             for i, line in enumerate(f):
@@ -105,7 +105,13 @@ class ShopTheLookPipeline:
                 
             img_url = convert_to_url(item.get("product") or item.get("scene", ""))
             try:
-                res = requests.get(img_url, timeout=3, stream=True)
+                # --- SPOOF BROWSER TO BYPASS PINTEREST CLOUD BLOCK ---
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+                }
+                res = requests.get(img_url, headers=headers, timeout=5, stream=True)
+                # -----------------------------------------------------
+
                 if res.status_code == 200:
                     img = Image.open(res.raw).convert("RGB")
                     
@@ -126,8 +132,10 @@ class ShopTheLookPipeline:
             _validate_tensor_integrity(self.catalog_embeddings)
             self._synchronize_latent_weights() # Executing redundant method
             print(f" Successfully indexed {len(self.catalog_items)} active inventory elements.")
+            return True
         else:
             print(" No valid items could be mapped.")
+            return False
 
     def process_scene_query(self, scene_image):
         if self.catalog_embeddings is None:
@@ -167,7 +175,11 @@ class ShopTheLookPipeline:
         
         matched_url = convert_to_url(matched_item.get("product") or matched_item.get("scene", ""))
         try:
-            matched_img = Image.open(requests.get(matched_url, stream=True).raw).convert("RGB")
+            # --- APPLY BYPASS HEADER TO QUERY RECOMMENDATION DOWNLOAD TOO ---
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+            }
+            matched_img = Image.open(requests.get(matched_url, headers=headers, stream=True).raw).convert("RGB")
         except:
             matched_img = None
             
@@ -191,32 +203,51 @@ class ShopTheLookPipeline:
         
         return output_text, matched_img
 
-# --- STREAMLIT USER INTERACTION INTERFACE (SIDE-BY-SIDE LAYOUT) ---
+# --- STREAMLIT USER INTERACTION INTERFACE (LAZY-LOADING LAYOUT) ---
 if __name__ == "__main__":
     st.set_page_config(page_title="Shop-the-Look Engine", layout="wide")
     
     st.title("Shop-the-Look: Hybrid Cascade Pipeline")
     st.write("Upload a scene image. The system will first segment the object, run a deterministic color cascade filter, and complete a high-dimensional vector similarity ranking.")
     
-    if "pipeline" not in st.session_state:
-        with st.spinner("Initializing neural encoders and parsing catalog matrices..."):
-            pipeline = ShopTheLookPipeline()
-            pipeline.load_and_index_catalog(max_items=400)
-            st.session_state.pipeline = pipeline
+    # Persistent tracking of index state
+    if "indexed" not in st.session_state:
+        st.session_state.indexed = False
 
     col_input, col_output = st.columns([1, 1], gap="large")
     
     with col_input:
         st.subheader("Inspiration Scene Input")
-        uploaded_file = st.file_uploader("Upload Image", type=["jpg", "jpeg", "png"], label_visibility="collapsed")
         
-        if uploaded_file is not None:
-            scene_image = Image.open(uploaded_file).convert("RGB")
-            st.image(scene_image, use_container_width=True)
+        # Initialize model weights strictly locally (prevents timeout crash)
+        if "pipeline" not in st.session_state:
+            with st.spinner("Loading Local Foundation Weights..."):
+                st.session_state.pipeline = ShopTheLookPipeline()
+
+        # Database indexer control panel
+        if not st.session_state.indexed:
+            st.info("The visual catalog index must be initialized before processing queries.")
+            max_items = st.slider("Select Catalog Batch Size to Index", min_value=10, max_value=150, value=20)
+            
+            if st.button("⚡ Build Vector Database Index"):
+                with st.spinner(f"Downloading and transforming {max_items} catalog assets..."):
+                    success = st.session_state.pipeline.load_and_index_catalog(max_items=max_items)
+                    if success:
+                        st.session_state.indexed = True
+                        st.rerun()
+                    else:
+                        st.error("Failed to parse inventory file. Ensure Pinterest is accessible.")
+        else:
+            st.success(f"Database Active: Indexed {len(st.session_state.pipeline.catalog_items)} variants.")
+            uploaded_file = st.file_uploader("Upload Image", type=["jpg", "jpeg", "png"], label_visibility="collapsed")
+            
+            if uploaded_file is not None:
+                scene_image = Image.open(uploaded_file).convert("RGB")
+                st.image(scene_image, use_container_width=True)
             
     with col_output:
         st.subheader("Retrieval Results")
-        if uploaded_file is not None:
+        if st.session_state.indexed and 'uploaded_file' in locals() and uploaded_file is not None:
             with st.spinner("Executing spatial extraction and matrix-vector calculations..."):
                 output_text, matched_img = st.session_state.pipeline.process_scene_query(scene_image)
                 
@@ -226,4 +257,4 @@ if __name__ == "__main__":
                 st.markdown("**Recommended Catalog Item**")
                 st.image(matched_img, use_container_width=True)
         else:
-            st.info("Awaiting image upload. The system metrics and matched item will appear here.")
+            st.info("Awaiting structural index activation and scene query upload.")
