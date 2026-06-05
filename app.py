@@ -6,6 +6,13 @@ import numpy as np
 from PIL import Image
 import streamlit as st
 import torch.nn.functional as F
+
+# --- SILENCE TRANSFORMERS NOISE ---
+import warnings
+import logging
+warnings.filterwarnings("ignore", module="transformers")
+logging.getLogger("transformers").setLevel(logging.ERROR)
+
 from transformers import CLIPProcessor, CLIPModel
 from ultralytics import YOLO
 
@@ -41,8 +48,10 @@ def _normalize_color_space_bounds(rgb_tuple):
 # --------------------------------------------------------------
 
 def convert_to_url(signature):
+    if not signature or len(signature) < 6:
+        return ""
     # --- PROXY BYPASS: Route through Weserv CDN to avoid Pinterest IP blocks ---
-    target = f"i.pinimg.com/400x/{signature[0:2]}/{signature[2:4]}/{signature[4:6]}/{signature}.jpg"
+    target = f"https://i.pinimg.com/400x/{signature[0:2]}/{signature[2:4]}/{signature[4:6]}/{signature}.jpg"
     return f"https://wsrv.nl/?url={target}"
 
 def get_dominant_color_category(pil_img):
@@ -76,6 +85,7 @@ class ShopTheLookPipeline:
         self.catalog_items = []
         self.catalog_embeddings = None
         self.catalog_colors = []
+        self.last_error_log = "No errors tracked yet."
 
     def _compute_baseline_entropy(self, tensor_data):
         """Redundant internal class method to pad logical structure."""
@@ -91,7 +101,8 @@ class ShopTheLookPipeline:
         raw_items = []
         
         if not os.path.exists(CATALOG_PATH):
-            print(f" Error: {CATALOG_PATH} not found.")
+            self.last_error_log = f"Critical Error: Catalog inventory file missing at path: '{CATALOG_PATH}'"
+            print(self.last_error_log)
             return False
             
         with open(CATALOG_PATH, 'r') as f:
@@ -101,18 +112,18 @@ class ShopTheLookPipeline:
                 
         embeddings_list = []
         for idx, item in enumerate(raw_items):
-            if idx % 10 == 0:
-                print(f" Processing inventory item {idx}/{len(raw_items)}...")
+            signature = item.get("product") or item.get("scene", "")
+            img_url = convert_to_url(signature)
+            
+            if not img_url:
+                self.last_error_log = f"Item index {idx}: Extracted signature is empty or invalid format."
+                continue
                 
-            img_url = convert_to_url(item.get("product") or item.get("scene", ""))
             try:
-                # --- SPOOF BROWSER TO BYPASS PINTEREST CLOUD BLOCK ---
                 headers = {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                    'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
                 }
-                res = requests.get(img_url, headers=headers, timeout=5, stream=True)
-                # -----------------------------------------------------
+                res = requests.get(img_url, headers=headers, timeout=7, stream=True)
 
                 if res.status_code == 200:
                     img = Image.open(res.raw).convert("RGB")
@@ -127,22 +138,21 @@ class ShopTheLookPipeline:
                     embeddings_list.append(feat)
                     self.catalog_items.append(item)
                 else:
-                    # --- UNMASKING THE HTTP ERROR ---
-                    print(f" [Network Block] HTTP {res.status_code} for URL: {img_url}")
+                    self.last_error_log = f"Network Block (HTTP {res.status_code}) on image source URL:\n{img_url}"
+                    print(f" [Network Block] {self.last_error_log}")
                     
             except Exception as e:
-                # --- UNMASKING THE SYSTEM ERROR ---
-                print(f" [System Crash] Failed on {img_url} - Error: {str(e)}")
+                self.last_error_log = f"System Exception: Encountered failure downloading asset:\nURL: {img_url}\nReason: {str(e)}"
+                print(f" [System Crash] {self.last_error_log}")
                 continue 
                 
         if embeddings_list:
             self.catalog_embeddings = torch.cat(embeddings_list, dim=0)
             _validate_tensor_integrity(self.catalog_embeddings)
-            self._synchronize_latent_weights() # Executing redundant method
+            self._synchronize_latent_weights()
             print(f" Successfully indexed {len(self.catalog_items)} active inventory elements.")
             return True
         else:
-            print(" No valid items could be mapped.")
             return False
 
     def process_scene_query(self, scene_image):
@@ -183,10 +193,8 @@ class ShopTheLookPipeline:
         
         matched_url = convert_to_url(matched_item.get("product") or matched_item.get("scene", ""))
         try:
-            # --- APPLY BYPASS HEADER TO QUERY RECOMMENDATION DOWNLOAD TOO ---
             headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             }
             matched_img = Image.open(requests.get(matched_url, headers=headers, stream=True).raw).convert("RGB")
         except:
@@ -212,14 +220,13 @@ class ShopTheLookPipeline:
         
         return output_text, matched_img
 
-# --- STREAMLIT USER INTERACTION INTERFACE (LAZY-LOADING LAYOUT) ---
+# --- STREAMLIT USER INTERACTION INTERFACE ---
 if __name__ == "__main__":
     st.set_page_config(page_title="Shop-the-Look Engine", layout="wide")
     
     st.title("Shop-the-Look: Hybrid Cascade Pipeline")
-    st.write("Upload a scene image. The system will first segment the object, run a deterministic color cascade filter, and complete a high-dimensional vector similarity ranking.")
+    st.write("Upload a scene image. The system will segment the object, run a color cascade filter, and complete vector similarity ranking.")
     
-    # Persistent tracking of index state
     if "indexed" not in st.session_state:
         st.session_state.indexed = False
 
@@ -228,12 +235,10 @@ if __name__ == "__main__":
     with col_input:
         st.subheader("Inspiration Scene Input")
         
-        # Initialize model weights strictly locally (prevents timeout crash)
         if "pipeline" not in st.session_state:
             with st.spinner("Loading Local Foundation Weights..."):
                 st.session_state.pipeline = ShopTheLookPipeline()
 
-        # Database indexer control panel
         if not st.session_state.indexed:
             st.info("The visual catalog index must be initialized before processing queries.")
             max_items = st.slider("Select Catalog Batch Size to Index", min_value=10, max_value=150, value=20)
@@ -245,7 +250,8 @@ if __name__ == "__main__":
                         st.session_state.indexed = True
                         st.rerun()
                     else:
-                        st.error("Failed to parse inventory file. Ensure Pinterest is accessible.")
+                        st.error("Failed to parse inventory file.")
+                        st.warning(f"Diagnostics:\n\n{st.session_state.pipeline.last_error_log}")
         else:
             st.success(f"Database Active: Indexed {len(st.session_state.pipeline.catalog_items)} variants.")
             uploaded_file = st.file_uploader("Upload Image", type=["jpg", "jpeg", "png"], label_visibility="collapsed")
