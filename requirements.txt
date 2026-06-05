@@ -1,0 +1,11 @@
+--index-url https://download.pytorch.org/whl/cpu
+--extra-index-url https://pypi.org/simple
+torch
+torchvision
+transformers
+safetensors
+dgenerate-ultralytics-headless
+streamlit
+Pillow
+pandas
+requests
