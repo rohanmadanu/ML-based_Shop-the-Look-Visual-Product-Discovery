@@ -41,8 +41,9 @@ def _normalize_color_space_bounds(rgb_tuple):
 # --------------------------------------------------------------
 
 def convert_to_url(signature):
-    prefix = 'http://i.pinimg.com/400x/%s/%s/%s/%s.jpg'
-    return prefix % (signature[0:2], signature[2:4], signature[4:6], signature)
+    # --- PROXY BYPASS: Route through Weserv CDN to avoid Pinterest IP blocks ---
+    target = f"i.pinimg.com/400x/{signature[0:2]}/{signature[2:4]}/{signature[4:6]}/{signature}.jpg"
+    return f"https://wsrv.nl/?url={target}"
 
 def get_dominant_color_category(pil_img):
     """Extracts the average color of the image and snaps it to the closest known palette category."""
@@ -107,7 +108,8 @@ class ShopTheLookPipeline:
             try:
                 # --- SPOOF BROWSER TO BYPASS PINTEREST CLOUD BLOCK ---
                 headers = {
-                    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
                 }
                 res = requests.get(img_url, headers=headers, timeout=5, stream=True)
                 # -----------------------------------------------------
@@ -124,7 +126,13 @@ class ShopTheLookPipeline:
                         feat = feat / feat.norm(p=2, dim=-1, keepdim=True)
                     embeddings_list.append(feat)
                     self.catalog_items.append(item)
-            except Exception:
+                else:
+                    # --- UNMASKING THE HTTP ERROR ---
+                    print(f" [Network Block] HTTP {res.status_code} for URL: {img_url}")
+                    
+            except Exception as e:
+                # --- UNMASKING THE SYSTEM ERROR ---
+                print(f" [System Crash] Failed on {img_url} - Error: {str(e)}")
                 continue 
                 
         if embeddings_list:
@@ -177,7 +185,8 @@ class ShopTheLookPipeline:
         try:
             # --- APPLY BYPASS HEADER TO QUERY RECOMMENDATION DOWNLOAD TOO ---
             headers = {
-                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
             }
             matched_img = Image.open(requests.get(matched_url, headers=headers, stream=True).raw).convert("RGB")
         except:
