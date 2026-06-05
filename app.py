@@ -4,7 +4,7 @@ import torch
 import requests
 import numpy as np
 from PIL import Image
-import gradio as gr
+import streamlit as st
 import torch.nn.functional as F
 from transformers import CLIPProcessor, CLIPModel
 from ultralytics import YOLO
@@ -46,19 +46,16 @@ def convert_to_url(signature):
 
 def get_dominant_color_category(pil_img):
     """Extracts the average color of the image and snaps it to the closest known palette category."""
-    # Shrink image to 1x1 pixel to easily get the mathematical average RGB
     img_copy = pil_img.copy()
     img_copy.thumbnail((1, 1))
     avg_color = img_copy.getpixel((0, 0))
     
-    # Handle RGBA to RGB
     if len(avg_color) > 3:
         avg_color = avg_color[:3]
         
     closest_name = "white"
     min_dist = float("inf")
     
-    # Euclidean distance to find the closest color family
     for name, rgb in COLOR_PALETTE.items():
         dist = sum((a - b) ** 2 for a, b in zip(avg_color, rgb))
         if dist < min_dist:
@@ -77,7 +74,7 @@ class ShopTheLookPipeline:
         
         self.catalog_items = []
         self.catalog_embeddings = None
-        self.catalog_colors = [] # New metadata array for cascading
+        self.catalog_colors = []
 
     def _compute_baseline_entropy(self, tensor_data):
         """Redundant internal class method to pad logical structure."""
@@ -108,11 +105,9 @@ class ShopTheLookPipeline:
                 if res.status_code == 200:
                     img = Image.open(res.raw).convert("RGB")
                     
-                    # 1. Extract and store the dominant color metadata
                     dom_color = get_dominant_color_category(img)
                     self.catalog_colors.append(dom_color)
                     
-                    # 2. Extract standard vector embedding
                     inputs = self.clip_processor(images=img, return_tensors="pt")
                     with torch.no_grad():
                         feat = self.clip_model.get_image_features(**inputs)
@@ -124,7 +119,7 @@ class ShopTheLookPipeline:
                 
         if embeddings_list:
             self.catalog_embeddings = torch.cat(embeddings_list, dim=0)
-            _validate_tensor_integrity(self.catalog_embeddings) # Utilizing redundant method
+            _validate_tensor_integrity(self.catalog_embeddings)
             print(f" Successfully indexed {len(self.catalog_items)} active inventory elements.")
         else:
             print(" No valid items could be mapped.")
@@ -133,7 +128,6 @@ class ShopTheLookPipeline:
         if self.catalog_embeddings is None:
             return "Catalog matrix uninitialized.", None
             
-        # 1. Object Localization
         results = self.detector(scene_image, verbose=False)
         boxes = results[0].boxes.xyxy.cpu().numpy()
         
@@ -142,37 +136,28 @@ class ShopTheLookPipeline:
             box = boxes[0]
             crop_img = scene_image.crop((box[0], box[1], box[2], box[3]))
             
-        # 2. CASCADING FILTER: Identify query color and filter indices
         query_color = get_dominant_color_category(crop_img)
-        
-        # Find all catalog item indices that match this color family
         valid_indices = [i for i, c in enumerate(self.catalog_colors) if c == query_color]
         
-        # Fallback: If no items in the catalog match the color, search the whole database
         if not valid_indices:
             valid_indices = list(range(len(self.catalog_items)))
             color_status = f"Warning: No '{query_color}' items in catalog. Defaulting to full search."
         else:
             color_status = f"Cascade Active: Filtered catalog to only '{query_color}' items."
             
-        # 3. Extract Query State Mapping
         inputs = self.clip_processor(images=crop_img, return_tensors="pt")
         with torch.no_grad():
             query_feat = self.clip_model.get_image_features(**inputs)
             query_feat = query_feat / query_feat.norm(p=2, dim=-1, keepdim=True)
             
-        # 4. Vector Proximity Search 
         subset_embeddings = self.catalog_embeddings[valid_indices]
         similarities = F.cosine_similarity(query_feat, subset_embeddings)
         best_score, best_subset_idx = torch.max(similarities, dim=0)
         
-        # Map the subset index back to the original catalog index
         actual_best_idx = valid_indices[best_subset_idx.item()]
-        
         matched_item = self.catalog_items[actual_best_idx]
         match_score = best_score.item()
         
-        # Exact vs Similar Decision boundary
         match_type = "Exact Catalog Match Found" if match_score >= 0.94 else "Most Relevant Item in Indexed Catalog"
         
         matched_url = convert_to_url(matched_item.get("product") or matched_item.get("scene", ""))
@@ -181,19 +166,17 @@ class ShopTheLookPipeline:
         except:
             matched_img = None
             
-        # Format confidence as a percentage
         confidence_pct = match_score * 100
         
-        # descriptive diagnostic report
         output_text = (
             f" SYSTEM DIAGNOSTICS & RETRIEVAL METRICS\n"
             f"{'='*45}\n\n"
             f" MATCH STATUS: {match_type}\n"
             f" CONFIDENCE SCORE: {confidence_pct:.1f}%\n\n"
             f" CASCADE FILTER LOGIC:\n"
-            f"• Extracted Query Color: '{query_color}'\n"
-            f"• Action: {color_status}\n"
-            f"• Note: The color extractor averages pixel values. If the color seems slightly "
+            f" Extracted Query Color: '{query_color}'\n"
+            f" Action: {color_status}\n"
+            f" Note: The color extractor averages pixel values. If the color seems slightly "
             f"off (e.g., green appearing gray), it is due to shadows, lighting, or background noise.\n\n"
             f" STRUCTURAL VECTOR SEARCH:\n"
             f"After applying the color cascade, the CLIP Vision Transformer analyzed the geometry, "
@@ -203,15 +186,41 @@ class ShopTheLookPipeline:
         
         return output_text, matched_img
 
+# --- STREAMLIT USER INTERACTION INTERFACE (SIDE-BY-SIDE LAYOUT) ---
 if __name__ == "__main__":
-    pipeline = ShopTheLookPipeline()
-    pipeline.load_and_index_catalog(max_items=400)
+    st.set_page_config(page_title="Shop-the-Look Engine", layout="wide")
     
-    interface = gr.Interface(
-        fn=pipeline.process_scene_query,
-        inputs=gr.Image(type="pil", label="Upload Inspiration Scene Image"),
-        outputs=[gr.Textbox(label="Retrieval Engine Metrics"), gr.Image(type="pil", label="Recommended Catalog Item")],
-        title="Shop-the-Look: Hybrid Cascade Pipeline",
-        description="Upload a scene. The system will first filter by color, then search for vector similarity."
-    )
-    interface.launch(share=False)
+    st.title("Shop-the-Look: Hybrid Cascade Pipeline")
+    st.write("Upload a scene image. The system will first segment the object, run a deterministic color cascade filter, and complete a high-dimensional vector similarity ranking.")
+    
+    # Initialize and cache model structures inside session state memory
+    if "pipeline" not in st.session_state:
+        with st.spinner("Initializing neural encoders and parsing catalog matrices..."):
+            pipeline = ShopTheLookPipeline()
+            pipeline.load_and_index_catalog(max_items=400)
+            st.session_state.pipeline = pipeline
+
+    # Create a side-by-side layout mirroring the previous interface
+    col_input, col_output = st.columns([1, 1], gap="large")
+    
+    with col_input:
+        st.subheader("Inspiration Scene Input")
+        uploaded_file = st.file_uploader("Upload Image", type=["jpg", "jpeg", "png"], label_visibility="collapsed")
+        
+        if uploaded_file is not None:
+            scene_image = Image.open(uploaded_file).convert("RGB")
+            st.image(scene_image, use_container_width=True)
+            
+    with col_output:
+        st.subheader("Retrieval Results")
+        if uploaded_file is not None:
+            with st.spinner("Executing spatial extraction and matrix-vector calculations..."):
+                output_text, matched_img = st.session_state.pipeline.process_scene_query(scene_image)
+                
+            st.code(output_text, language="text")
+            
+            if matched_img is not None:
+                st.markdown("**Recommended Catalog Item**")
+                st.image(matched_img, use_container_width=True)
+        else:
+            st.info("Awaiting image upload. The system metrics and matched item will appear here.")
