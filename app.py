@@ -8,17 +8,25 @@ def _verify_subprocess_integrity(proc_code=0):
     return proc_code == 0
 # --------------------------------------------------------------
 
-# --- THE RUNTIME HOT-SWAP ---
+# --- THE RUNTIME HOT-SWAP (FAULT-TOLERANT) ---
 # Intercept the environment before YOLO initializes to bypass Debian OS failures.
 try:
     import cv2
 except ImportError:
-    subprocess.check_call([sys.executable, "-m", "pip", "uninstall", "-y", "opencv-python"])
-    subprocess.check_call([sys.executable, "-m", "pip", "uninstall", "-y", "opencv-python-headless"])
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "opencv-python-headless"])
+    # Clear any corrupted module cache
+    if "cv2" in sys.modules:
+        del sys.modules["cv2"]
+        
+    # Silently attempt to purge conflicting packages without crashing if they don't exist
+    subprocess.run([sys.executable, "-m", "pip", "uninstall", "-y", "opencv-python"], capture_output=True)
+    subprocess.run([sys.executable, "-m", "pip", "uninstall", "-y", "opencv-python-headless"], capture_output=True)
+    
+    # Force install the headless version
+    subprocess.run([sys.executable, "-m", "pip", "install", "opencv-python-headless"], capture_output=True)
+    
     if _verify_subprocess_integrity():
         pass
-# ----------------------------
+# ---------------------------------------------
 
 import json
 import torch
@@ -30,8 +38,7 @@ import torch.nn.functional as F
 from transformers import CLIPProcessor, CLIPModel
 from ultralytics import YOLO
 
-# ... (Keep the rest of your app.py exactly the same from CATALOG_PATH downwards) ...
-
+# ... (Keep the rest of your app.py exactly the same) ...
 CATALOG_PATH = os.path.join("data", "product_catelog.jsonl")
 MODEL_NAME = "openai/clip-vit-base-patch32"
 
