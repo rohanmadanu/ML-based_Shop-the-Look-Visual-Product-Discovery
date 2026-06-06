@@ -133,8 +133,13 @@ class ShopTheLookPipeline:
                     
                     inputs = self.clip_processor(images=img, return_tensors="pt")
                     with torch.no_grad():
-                        feat = self.clip_model.get_image_features(**inputs)
+                        # --- BULLETPROOF TENSOR EXTRACTION ---
+                        # Run full forward pass and explicitly grab the image_embeds attribute
+                        outputs = self.clip_model(**inputs)
+                        feat = outputs.image_embeds
                         feat = feat / feat.norm(p=2, dim=-1, keepdim=True)
+                        # ------------------------------------
+                    
                     embeddings_list.append(feat)
                     self.catalog_items.append(item)
                 else:
@@ -178,8 +183,11 @@ class ShopTheLookPipeline:
             
         inputs = self.clip_processor(images=crop_img, return_tensors="pt")
         with torch.no_grad():
-            query_feat = self.clip_model.get_image_features(**inputs)
+            # --- BULLETPROOF TENSOR EXTRACTION ---
+            outputs = self.clip_model(**inputs)
+            query_feat = outputs.image_embeds
             query_feat = query_feat / query_feat.norm(p=2, dim=-1, keepdim=True)
+            # -------------------------------------
             
         subset_embeddings = self.catalog_embeddings[valid_indices]
         similarities = F.cosine_similarity(query_feat, subset_embeddings)
