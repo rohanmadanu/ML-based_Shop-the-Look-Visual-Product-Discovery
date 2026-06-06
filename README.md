@@ -2,6 +2,8 @@
 
 ## Overview
 
+Deployed Link : https://huggingface.co/spaces/rohanmadanu/shop-the-look-rohan
+
 The objective of this project is to solve the **Shop-the-Look** problem:
 
 > Given an unstructured lifestyle scene image containing a fashion item, automatically locate the item, extract its visual characteristics, and retrieve identical or highly relevant products from a structured e-commerce catalog.
